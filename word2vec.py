@@ -1,149 +1,229 @@
 import pandas as pd
+# import cupy as np
 import numpy as np
 import re
+import string
 import scipy as sp
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
+import multiprocessing as mp
+import random
 
 def normalize(vector) :
 	return vector / np.linalg.norm(vector)
 
 ################################################################################################################################################################################
 
-def accuracy(score : pd.DataFrame) :
+def accuracy(score : list) :
 	acc = 0
 	for score_df in score :
-		acc += np.log(score_df["score"]).sum()
-	return acc
+		acc += np.log(score_df["score"]).mean()
+	return acc / len(score)
 
 ################################################################################################################################################################################
 
 def score(words_df : pd.DataFrame) :
 	scores = []
 	for i in range(words_df.shape[0]) :
-		vector_sum = np.array([words_df["ctx vector"][j] for j in words_df["context"][i]["idx"]])
-		vector_sum_idx = np.array([j for j in words_df["context"][i]["idx"]])
+		vector_sum = np.vstack(words_df["context"][i]["vector"])
+		vector_sum_idx = np.array(words_df["context"][i]["idx"])
 		scores.append(pd.DataFrame(index=vector_sum_idx, data=sp.special.expit(np.dot(vector_sum, words_df["vector"][i])), columns=["score"]))
-
+		# print(vector_sum.shape)
 	return scores
 	
 ################################################################################################################################################################################
 
-def plot(words_df : pd.DataFrame, words = None, context = False) :
+def plot(words_df : pd.DataFrame, words = None, labels = True) :
+	set_ax_limits = True
 	if words is None :
 		words = words_df["word"].tolist()
+		set_ax_limits = False
 
-	pca = PCA(n_components=2)
-	vec = pca.fit_transform(np.vstack(words_df["vector"].loc[words_df["word"].isin(words)]))
-	ctx_vec = pca.fit_transform(np.vstack(words_df["ctx vector"].loc[words_df["word"].isin(words)]))
+	if np.vstack(words_df["vector"]).shape[1] > 2 :
+		print("dim too large using PCA")
+		pca = PCA(n_components=2)
+		vec = pca.fit_transform(np.vstack(words_df["vector"].loc[words_df["word"].isin(words)]))
+	else:
+		vec = np.vstack(words_df["vector"].loc[words_df["word"].isin(words)])
 
-	if context is True:
-		plt.figure(figsize=(12, 5))
-		plt.subplot(1,2,1)
-	else :
-		plt.figure(figsize=(7, 7))
+	plt.figure(figsize=(7,7))
 	x = [v[0] for v in vec]
 	y = [v[1] for v in vec]
+	if set_ax_limits :
+		plt.xlim(-1.5, 1.5)
+		plt.ylim(-1.5, 1.5)
 	plt.scatter(x, y)
 	plt.title("Word vectors")
-	for i, word in enumerate(words_df["word"].loc[words_df["word"].isin(words)]) :
-		plt.annotate(word, (x[i], y[i]))
-
-	if context is True:
-		plt.subplot(1,2,2)
-		x_ctx = [v[0] for v in ctx_vec]
-		y_ctx = [v[1] for v in ctx_vec]
-		plt.scatter(x_ctx, y_ctx, color=['orange'])
-		plt.title("Word context vectors")
+	if labels :
 		for i, word in enumerate(words_df["word"].loc[words_df["word"].isin(words)]) :
-			plt.annotate(word, (x_ctx[i], y_ctx[i]))
-	
+			plt.annotate(word, (x[i], y[i]))
+
+	plt.show()
+
 ################################################################################################################################################################################
 
-def injectVectors(words_df : pd.DataFrame, vectors) :
-	words_df["vectors"] = [v for v in vectors[0][0]]
-	return words_df
+def stripPunctuation(list_of_sentences : list) :
+	list_of_words = []
+	for text in list_of_sentences :
+		list_of_words.append(np.array([word for word in re.sub('\W', ' ', re.sub("[’']", "", re.sub("http[\S]+", "URL", text, flags=re.U), flags=re.U), flags=re.U).lower().split()]))
+	return list_of_words
 
 ################################################################################################################################################################################
 
 class Word2Vec :
-	words_df = pd.DataFrame()
+	words_df = pd.DataFrame(columns=["word", "vector", "context"])
 	EMBEDDING = 0
 	CONTEXT_SIZE = 0
 	NEG_SAMPLING = 0
-	def __init__(self, text: str, embedding: int = 5, context_size : int = 2, negative_sampling : int = 3) :
+	cpu_count = 1
+	list_of_tweets = []
+	def __init__(self, list_of_sentences: list, embedding: int = 5, context_size : int = 2, negative_sampling : int = 3, cpu_count : int = 1) :
+		self.words_df = pd.DataFrame(columns=["word", "vector", "context"])
+		
 		self.EMBEDDING = embedding
 		self.CONTEXT_SIZE = context_size
 		self.NEG_SAMPLING = negative_sampling
-		
-		self.words_df["word"] = [word for word in re.split("\,\s|\.\s|\:\s|\s", text)]
-		self.words_df["vector"] = [normalize(v) for v in [np.random.rand(self.EMBEDDING) * 2 - 1 for _ in range(self.words_df.shape[0])]]
-		self.words_df["ctx vector"] = [normalize(v) for v in [np.random.rand(self.EMBEDDING) * 2 - 1 for _ in range(self.words_df.shape[0])]]
+
+		self.cpu_count = cpu_count
+		self.list_of_tweets = stripPunctuation(list_of_sentences)
+
+		for word in np.unique(np.concatenate(self.list_of_tweets)) :
+			self.words_df.loc[self.words_df.shape[0]] = [
+				word,
+				normalize(np.random.rand(self.EMBEDDING) * 2 - 1),
+				pd.DataFrame(columns=["idx", "label", "vector"])
+				]
 
 		self.FindContext()
 
 ################################################################################################################################################################################
 
-	def GetWindowRange(self, wordIdx) :
-		Lshift, Rshift = [0,0]
-		if wordIdx - self.CONTEXT_SIZE < 0 :
-			Lshift = self.CONTEXT_SIZE - wordIdx
-		if wordIdx + self.CONTEXT_SIZE + 1 > self.words_df.shape[0] :
-			Rshift = self.CONTEXT_SIZE + wordIdx + 1 - self.words_df.shape[0]
-		return (wordIdx - self.CONTEXT_SIZE + Lshift, wordIdx + self.CONTEXT_SIZE + 1 - Rshift)
+	def __init__(self) :
+		self.words_df = pd.DataFrame(columns=["word", "vector", "context"])
+
+################################################################################################################################################################################
+
+	def partialCtx(self, arr) :
+		for i in arr :
+			ctx_range = []
+			for id, corpus in enumerate(self.list_of_tweets) :
+				for wordIdx in np.where(corpus == self.words_df["word"][i])[0] :
+					window = [self.CONTEXT_SIZE,self.CONTEXT_SIZE]
+					if wordIdx < window[0] : window[0] = wordIdx
+					if (len(corpus) - 1) - wordIdx < window[1] : window[1] = (len(corpus) - 1) - wordIdx
+					if window[0] > 0 : 
+						ctx_range.append([(id, i) for i in range(wordIdx - window[0], wordIdx)])
+					if window[1] > 0 : 
+						ctx_range.append([(id, i) for i in range(wordIdx + 1, wordIdx + window[1] + 1)])
+			ctx_range = np.concatenate(ctx_range)
+			
+			context = self.words_df.loc[self.words_df["word"].isin([self.list_of_tweets[pair[0]][pair[1]] for pair in ctx_range])]
+			self.words_df["context"][i]["idx"] = context["word"].index.values
+			self.words_df["context"][i]["label"] = [1 for _ in range(context.shape[0])]
+			self.words_df["context"][i]["vector"] = context["vector"].values
+			self.words_df["context"][i].index = context["word"].values
+			
+			for _ in range(self.NEG_SAMPLING * self.words_df["context"][i].shape[0]) :
+				try:
+					sample_idx = random.choice([idx for idx in self.words_df.index.values if idx not in self.words_df["context"][i]["idx"].values])
+					self.words_df["context"][i].loc[self.words_df["word"][sample_idx]] = [sample_idx, 0, self.words_df["vector"][sample_idx]]
+				except Exception as e :
+					print("unable to find more negative samples for: \"" + self.words_df["word"][i] + "\" skipping...")
+					break
+		return self.words_df["context"]
 
 ################################################################################################################################################################################
 
 	def FindContext(self) :
-		self.words_df["context"] = [pd.DataFrame() for _ in range(self.words_df.shape[0])]
-		for i in range(self.words_df.shape[0]) :
-			tmp = {self.words_df["word"][offset] : [offset, 1] for offset in range(self.GetWindowRange(i)[0], self.GetWindowRange(i)[1]) if self.words_df["word"][offset] != self.words_df["word"][i]}
-			self.words_df["context"][i]["idx"] = [pair[0] for pair in tmp.values()]
-			self.words_df["context"][i]["label"] = [pair[1] for pair in tmp.values()]
-			self.words_df["context"][i].index = tmp.keys()
-
-			for _ in range(self.NEG_SAMPLING) :
-				timeout = 100
-				while True :
-					sampleWordIdx = np.random.randint(0, self.words_df.shape[0])
-					sampleWord = self.words_df["word"][sampleWordIdx]
-					if sampleWord not in self.words_df["context"][i].index :
-						break
-					timeout -= 1
-					if timeout == 0 :
-						print("Unable to find word outside context window for word " + self.words_df["word"][i])
-						sampleWord = np.NAN
-						break
-				self.words_df["context"][i].loc[sampleWord] = [sampleWordIdx, 0]
+		thread_pool = mp.Pool(processes=self.cpu_count)
+		self.words_df["context"] = [row for row in np.concatenate(thread_pool.map(self.partialCtx, np.array_split(np.arange(self.words_df.shape[0]), self.cpu_count))) if row.size > 0]
+		thread_pool.close()
 
 ################################################################################################################################################################################
 
-	def update(self, learning_rate : float, tol : float) :
-		scores = score(self.words_df)
-		copy = self.words_df.copy()
+	def saveToFile(self, filename):
+		file = open(filename, "w")
+		for i in self.words_df.index.values:
+			file.write(self.words_df.loc[i]["word"] + "\n")
+			file.write(str(self.words_df.loc[i]["vector"]) + "\n")
+			file.write("-----------------------------------------------\n")
+			for j in self.words_df.loc[i]["context"].index.values:
+				file.write(j + ", " + str(self.words_df.loc[i]["context"].loc[j]["idx"]) + ", " + str(self.words_df.loc[i]["context"].loc[j]["label"]) + "\n")
+			file.write("-----------------------------------------------\n")
+			
+		file.close()
+
+################################################################################################################################################################################
+
+	def loadFromFile(self, filename):
+		self.words_df = pd.DataFrame(columns=["word", "vector", "context"])
+		buffer = ""
+		with open(filename, "r") as file :
+			buffer = file.read()
+		
+		self.words_df["word"] = [re.sub("\s*\[", "", word) for word in re.findall(r"\w+\s\[", buffer)]
+		self.words_df["vector"] = [np.array([float(x) for x in re.findall(r"[\-\.\de]+", vec)]) for vec in re.findall(r"\[[\-?\de\.\s]+\]", buffer)]
+		
+		contexts = [np.array([re.findall(r"\w+", row) for row in re.findall(r"\w+\,\s\w+\,\s\w+", ctx)]) for ctx in re.findall(r"\-{2,}[\w\,\s]+\-{2,}", buffer)]
+		contexts = [[[row[0], int(row[1]), int(row[2])] for row in ctx] for ctx in contexts]
+		self.words_df["context"] = [pd.DataFrame(index=[row[0] for row in ctx], data=[[row[1], row[2]] for row in ctx], columns=["idx", "label"]) for ctx in contexts]
+
 		for i in range(self.words_df.shape[0]) :
-			for j in self.words_df["context"][i]["idx"] :
-				bias = (self.words_df["ctx vector"][j] - self.words_df["vector"][i]) * (self.words_df["context"][i]["label"][self.words_df["word"][j]] - scores[i]["score"][j]) * learning_rate
-				copy["vector"][i] = bias + copy["vector"][i]
-				copy["ctx vector"][j] = bias - copy["ctx vector"][j]
-		copy["vector"] = [normalize(copy["vector"][i]) for i in range(copy.shape[0])]
-		copy["ctx vector"] = [normalize(copy["ctx vector"][i]) for i in range(copy.shape[0])]
+			self.words_df.loc[i, "context"]["vector"] = self.words_df["vector"][self.words_df["context"][i]["idx"]].values
+
+################################################################################################################################################################################
+
+	def calcBias(self, arr) :
+		scores = score(self.processed_df)
+		copy = self.processed_df.copy()
+		
+		for i in arr :
+			bias = (np.vstack(self.processed_df["context"][i]["vector"]) - self.processed_df["vector"][i]) * (self.processed_df["context"][i]["label"].values - scores[i]["score"].values).reshape(-1,1) * self.learning_rate
+			copy.loc[i, "vector"] = normalize(bias.sum(axis=0) + copy["vector"][i])
+		return copy["vector"]
+
+################################################################################################################################################################################
+	
+	def update(self, processed_df : pd.DataFrame) :
+		copy = processed_df.copy()
+
+		# thread_pool = mp.Pool(processes=self.cpu_count)
+		# copy["vector"] = thread_pool.map(self.calcBias, np.array_split(np.arange(self.words_df.shape[0]), 2))[0]
+		# thread_pool.close()
+		
+		copy["vector"] = self.calcBias(np.arange(self.words_df.shape[0]))
+		
+		for i in range(processed_df.shape[0]) :
+			copy.loc[i, "context"]["vector"] = copy["vector"][copy["context"][i]["idx"]].values
 
 		return copy
 	
 ################################################################################################################################################################################
 
-	def train(self, learning_rate : float, max_steps: int, tol : float = 1e-1, draw_middle_results = False) :
-		word2vec_list = []
+	def train(self, learning_rate : float, max_steps: int, early_stop : float = None, draw_middle_results = False, words = None) :
+		self.learning_rate = learning_rate
+		self.processed_df = self.words_df.copy()
+		word2vec_list = [(np.vstack(self.processed_df["vector"].values), accuracy(score(self.processed_df)))]
+
+		print("Processing: %3d" % int(0 / max_steps * 100) + "%" + " --- accuracy in current step: %4.5f" % accuracy(score(self.processed_df)))
+		if draw_middle_results:
+			plot(self.processed_df, words=words)
+		
 		for i in range(max_steps) :
-			self.words_df = self.update(learning_rate, tol)
-			word2vec_list.append((np.vstack(self.words_df["vector"].values), accuracy(score(self.words_df))))
+			self.processed_df = self.update(self.processed_df)
+			word2vec_list.append((np.vstack(self.processed_df["vector"].values), accuracy(score(self.processed_df))))
+			
 			if (i + 1) % int(max_steps / 10) == 0 :
-				print("Processing: %3d" % int((i + 1) / max_steps * 100) + "%" + " --- accuracy in current step: %4.5f" % accuracy(score(self.words_df)))
+				print("Processing: %3d" % int((i + 1) / max_steps * 100) + "%" + " --- accuracy in current step: %4.5f" % accuracy(score(self.processed_df)))
 				if draw_middle_results:
-					self.plot()
+					plot(self.processed_df, words=words)
+			if early_stop is not None :
+				if word2vec_list[-1][1] - word2vec_list[-2][1] < early_stop * word2vec_list[-2][1]:
+					print("Algorithm is trained to well... Exiting.")
+					break
+			
+		self.processed_df["vector"] = [v for v in sorted(word2vec_list, key=lambda rep: -rep[1])[0][0]]
+		for i in range(self.processed_df.shape[0]) :
+			self.processed_df["context"][i]["vector"] = self.processed_df["vector"][self.processed_df["context"][i]["idx"]].values
 
-		word2vec_list = sorted(word2vec_list, key=lambda rep: -rep[1])
-		self.words_df = injectVectors(self.words_df, word2vec_list)
-
-		return self.words_df, word2vec_list
+		return self.processed_df, word2vec_list
