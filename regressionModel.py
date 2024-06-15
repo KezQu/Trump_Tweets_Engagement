@@ -26,8 +26,16 @@ def FilterDataset(dataset, size) :
 			filtered = filtered.drop(idx)
 	return filtered
 
-def LoadDataset(size, vec_size):
-	trumpTweets_DF = pd.read_csv("realerdonaldertrumper.csv", sep=",")
+def LoadDataset(size, vec_size, version):
+	filename = ""
+	if version == "v1":
+		filename = "realdonaldtrump.csv"
+	elif version == "v2":
+		filename = "realerdonaldertrumper.csv"
+	elif version == "v3":
+		filename = "realestdonaldestrumpest.csv"
+	trumpTweets_DF = pd.read_csv(filename, sep=",")
+	print("CSV version:",sys.argv[3],"--",filename)
 
 	result_data = w2v.Word2Vec()
 	result_data.loadFromFile("./models_" + str(version) + "/calculated_model_" + str(size) + "_" + str(vec_size) + ".txt")
@@ -122,9 +130,8 @@ if __name__ == "__main__" :
 	show_metrics = bool(sys.argv[4])
 	print("Requested model_size:",sys.argv[1])
 	print("Requested vec_size:",sys.argv[2])
-	print("CSV version:",sys.argv[3])
 
-	X, Y = LoadDataset(1000, 500)
+	X, Y = LoadDataset(1000, 500, version)
 	train_split, test_split = train_test_split(X,Y, 0.2)
 	result = calculateModel(X, Y, train_split, test_split, 0.2, 73, 1, verbose=0)
 	history = result[2]

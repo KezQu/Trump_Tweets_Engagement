@@ -3,18 +3,29 @@ import pandas as pd
 import numpy as np
 from scipy.spatial.distance import cosine
 import sys
+size = int(sys.argv[1])
+vec_size = int(sys.argv[2])
 
-trumpTweets_DF = pd.read_csv("realestdonaldestrumpest.csv", sep=",")
-trumpTweets_DF
+trumpTweets_DF = None
+
+filename = ""
+if sys.argv[3] == "v1":
+	filename = "realdonaldtrump.csv"
+elif sys.argv[3] == "v2":
+	filename = "realerdonaldertrumper.csv"
+elif sys.argv[3] == "v3":
+	filename = "realestdonaldestrumpest.csv"
+
+trumpTweets_DF = pd.read_csv(filename, sep=",")
+
+print("Requested model_size:",sys.argv[1])
+print("Requested vec_size:",sys.argv[2])
+print("CSV version:",sys.argv[3],"--",filename)
+
 tweetsContent = trumpTweets_DF["content"].to_numpy()
 
 model = w2v.Word2Vec()
-print("Requested model_size:",sys.argv[1])
-print("Requested vec_size:",sys.argv[2])
-print("CSV version:",sys.argv[3])
 
-size = int(sys.argv[1])
-vec_size = int(sys.argv[2])
 print("Loading model",size,"from file")
 model.loadFromFile("./test_" + str(sys.argv[3]) + "/model_" + str(size) + ".txt")
 
