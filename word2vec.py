@@ -65,7 +65,7 @@ def plot(words_df : pd.DataFrame, words = None, labels = True) :
 
 def stripPunctuation(list_of_sentences : list) :
 	list_of_words = []
-	for text in list_of_sentences :
+	for i, text in enumerate(list_of_sentences) :
 		tmp = np.array([word for word in re.sub('\W', ' ', re.sub("[’']", "", re.sub("http[\S]+", "URL", text, flags=re.U), flags=re.U), flags=re.U).lower().split()])
 		if len(tmp) > 1 :
 			list_of_words.append(tmp)
