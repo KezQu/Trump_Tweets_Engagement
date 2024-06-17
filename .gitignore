@@ -6,12 +6,13 @@ __pycache__/
 models_v1/*
 models_v2/*
 models_v3/*
-!models_v3/calculated_model_43000_100.txt
+# !models_v3/calculated_model_43000_100.txt
+*.csv
 DEBUG/*
 test_v1/*
 test_v2/*
 test_v3/*
-!test_v3/model_43000.txt
+# !test_v3/model_43000.txt
 *.png
 # C extensions
 *.so
